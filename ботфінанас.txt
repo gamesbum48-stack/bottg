@@ -1,13 +1,15 @@
 import asyncio
 import logging
+import os
 import re
 import sqlite3
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F, types
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
 
-# Твої дані
-BOT_TOKEN = "8959720819:AAGs_z79er5bryEJTiIOUgYhi-EwOve1YjI"
+# Отримуємо токен зі змінних оточення (або підставиться твій, якщо змінна не задана)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8959720819:AAGs_z79er5bryEJTiIOUgYhi-EwOve1YjI")
 MY_TELEGRAM_ID = 882424834
 
 logging.basicConfig(level=logging.INFO)
@@ -47,7 +49,7 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS external_finances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category_type TEXT, -- 'investment' або 'expense'
+            category_type TEXT,
             name TEXT,
             amount REAL,
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -118,26 +120,21 @@ def get_analytics():
     conn = sqlite3.connect("ipad_pro_biz.db")
     cursor = conn.cursor()
     
-    # 1. Усього зароблено від iPad
     cursor.execute("SELECT SUM(profit) FROM sales")
     total_profit = cursor.fetchone()[0] or 0.0
     
-    # 2. Прибуток за цей місяць
     now = datetime.now()
     first_day_of_month = datetime(now.year, now.month, 1).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute("SELECT SUM(profit) FROM sales WHERE date >= ?", (first_day_of_month,))
     month_profit = cursor.fetchone()[0] or 0.0
 
-    # 3. Прибуток за цей тиждень (останні 7 днів)
     week_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute("SELECT SUM(profit) FROM sales WHERE date >= ?", (week_ago,))
     week_profit = cursor.fetchone()[0] or 0.0
 
-    # 4. Капітал у товарі
     cursor.execute("SELECT SUM(buy_price + repair_cost) FROM inventory")
     invested_in_stock = cursor.fetchone()[0] or 0.0
 
-    # 5. Інвестиції та витрати
     cursor.execute("SELECT SUM(amount) FROM external_finances WHERE category_type = 'investment'")
     total_invested = cursor.fetchone()[0] or 0.0
 
@@ -146,7 +143,6 @@ def get_analytics():
 
     conn.close()
     
-    # Вільний баланс = Прибуток від iPad - Інвестиції - Витрати
     free_balance = total_profit - total_invested - total_expenses
     
     return {
@@ -183,15 +179,15 @@ async def start_cmd(message: types.Message):
         "**Команди для iPad:**\n"
         "• `купив iPad Air 4 64GB 180` — додати товар\n"
         "• `ремонт 1 25` — додати 25€ ремонту до ID 1\n"
-        "• `продав 1 260` — продати ID 1 за 260€ (з порахованим ROI)\n"
-        "• /stock — дивитися склад та дні в наявності\n\n"
+        "• `продав 1 260` — продати ID 1 за 260€\n"
+        "• /stock — перегляд складу\n\n"
         "**Інвестиції та витрати:**\n"
         "• `інвест NVIDIA 100` — зафіксувати інвестицію\n"
-        "• `інвест TG wallet 50` — зафіксувати інвестицію\n"
         "• `витрата продукти 40` — особиста витрата з прибутку\n\n"
-        "**Аналітика та баланс:**\n"
-        "• /stats — повний фінансовий звіт і вільний баланс\n"
-        "• /investments — портфель усіх твоїх інвестицій"
+        "**Аналітика:**\n"
+        "• /stats — повний звіт\n"
+        "• /investments — портфель інвестицій",
+        parse_mode=ParseMode.MARKDOWN
     )
 
 @dp.message(Command("stock"))
@@ -208,9 +204,11 @@ async def stock_cmd(message: types.Message):
         total = buy_price + repair_cost
         repair_str = f" (+{repair_cost:.2f}€ ремонт)" if repair_cost > 0 else ""
         
-        # Рахуємо дні на складі
-        added_dt = datetime.strptime(date_added, "%Y-%m-%d %H:%M:%S")
-        days_on_stock = (now - added_dt).days
+        try:
+            added_dt = datetime.strptime(date_added.split(".")[0], "%Y-%m-%d %H:%M:%S")
+            days_on_stock = (now - added_dt).days
+        except Exception:
+            days_on_stock = 0
         
         text += (
             f"🔹 **ID: {ipad_id}** | **{model}**\n"
@@ -219,7 +217,7 @@ async def stock_cmd(message: types.Message):
         )
     
     text += "💡 *Щоб продати: `продав ID ціна` (наприклад: `продав 1 250`)*"
-    await message.answer(text)
+    await message.answer(text, parse_mode=ParseMode.MARKDOWN)
 
 @dp.message(Command("stats"))
 async def stats_cmd(message: types.Message):
@@ -236,7 +234,8 @@ async def stats_cmd(message: types.Message):
         f"├ 🚀 Інвестовано далі: **{data['total_invested']:.2f} €**\n"
         f"└ 💸 Інші витрати: **{data['total_expenses']:.2f} €**\n\n"
         f"💰 **Вільний чистий баланс (на руках):**\n"
-        f"👉 **{data['free_balance']:.2f} €**"
+        f"👉 **{data['free_balance']:.2f} €**",
+        parse_mode=ParseMode.MARKDOWN
     )
 
 @dp.message(Command("investments"))
@@ -249,7 +248,7 @@ async def investments_cmd(message: types.Message):
     text = "💼 **Твій інвестиційний портфель:**\n\n"
     for name, total_amt in invs:
         text += f"▪️ **{name}**: {total_amt:.2f} €\n"
-    await message.answer(text)
+    await message.answer(text, parse_mode=ParseMode.MARKDOWN)
 
 # --- ОБРОБКА ТЕКСТУ ---
 @dp.message(F.text)
@@ -257,7 +256,6 @@ async def process_text(message: types.Message):
     text = message.text.strip()
     text_lower = text.lower()
 
-    # 1. Додавання покупки: купив iPad Air 4 64GB 180
     if text_lower.startswith("купив") or text_lower.startswith("+"):
         match = re.search(r"(?:купив|\+)\s*(.*?)\s*(\d+(?:\.\d+)?)\s*€?$", text, re.IGNORECASE)
         if match:
@@ -266,22 +264,20 @@ async def process_text(message: types.Message):
             if not model: 
                 model = "iPad"
             add_ipad(model, price)
-            await message.answer(f"✅ Додано в наявність: **{model}** за **{price:.2f}€**.\nПерегляд складу: /stock")
+            await message.answer(f"✅ Додано в наявність: **{model}** за **{price:.2f}€**.\nПерегляд складу: /stock", parse_mode=ParseMode.MARKDOWN)
             return
 
-    # 2. Ремонт: ремонт 1 25
     if text_lower.startswith("ремонт"):
         match = re.search(r"ремонт\s+(\d+)\s+(\d+(?:\.\d+)?)", text_lower)
         if match:
             ipad_id = int(match.group(1))
             cost = float(match.group(2))
             if add_repair(ipad_id, cost):
-                await message.answer(f"🔧 До ID {ipad_id} додано ремонт на **{cost:.2f}€**.")
+                await message.answer(f"🔧 До ID {ipad_id} додано ремонт на **{cost:.2f}€**.", parse_mode=ParseMode.MARKDOWN)
             else:
                 await message.answer(f"❌ iPad з ID {ipad_id} не знайдено.")
             return
 
-    # 3. Продаж: продав 1 260
     if text_lower.startswith("продав"):
         match = re.search(r"продав\s+(\d+)\s+(\d+(?:\.\d+)?)", text_lower)
         if match:
@@ -295,30 +291,29 @@ async def process_text(message: types.Message):
                     f"🏷 Ціна продажу: {sell_price:.2f}€\n"
                     f"📉 Собівартість: {res['total_cost']:.2f}€\n"
                     f"{symbol} **Чистий прибуток:** {res['profit']:.2f}€\n"
-                    f"📊 **Маржинальність (ROI):** {res['roi']:.1f}%"
+                    f"📊 **Маржинальність (ROI):** {res['roi']:.1f}%",
+                    parse_mode=ParseMode.MARKDOWN
                 )
             else:
                 await message.answer(f"❌ iPad з ID {ipad_id} не знайдено на складі.")
             return
 
-    # 4. Інвестиції: інвест NVIDIA 100
     if text_lower.startswith("інвест") or text_lower.startswith("інвестиція"):
         match = re.search(r"(?:інвест|інвестиція)\s+(.*?)\s+(\d+(?:\.\d+)?)", text, re.IGNORECASE)
         if match:
             asset_name = match.group(1).strip()
             amount = float(match.group(2))
             add_external_finance("investment", asset_name, amount)
-            await message.answer(f"🚀 Записано інвестицію: **{amount:.2f}€** в **{asset_name}**.")
+            await message.answer(f"🚀 Записано інвестицію: **{amount:.2f}€** в **{asset_name}**.", parse_mode=ParseMode.MARKDOWN)
             return
 
-    # 5. Особисті витрати з прибутку: витрата продукти 40
     if text_lower.startswith("витрата") or text_lower.startswith("витратив"):
         match = re.search(r"(?:витрата|витратив)\s+(.*?)\s+(\d+(?:\.\d+)?)", text, re.IGNORECASE)
         if match:
             exp_name = match.group(1).strip()
             amount = float(match.group(2))
             add_external_finance("expense", exp_name, amount)
-            await message.answer(f"💸 Записано витрату: **{amount:.2f}€** ({exp_name}).")
+            await message.answer(f"💸 Записано витрату: **{amount:.2f}€** ({exp_name}).", parse_mode=ParseMode.MARKDOWN)
             return
 
     await message.answer(
@@ -328,8 +323,9 @@ async def process_text(message: types.Message):
         "• `ремонт 1 20`\n"
         "• `продав 1 250`\n"
         "• `інвест NVIDIA 100`\n"
-        "• `витрата продукти 30`\n"
-        "• /stock чи /stats"
+        "• `витрата продукты 30`\n"
+        "• /stock чи /stats",
+        parse_mode=ParseMode.MARKDOWN
     )
 
 async def main():
